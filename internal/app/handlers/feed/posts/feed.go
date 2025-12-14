@@ -1,4 +1,4 @@
-package posts_user_all
+package feed_posts
 
 import (
 	"feed/internal/lib/api/image"
@@ -7,6 +7,7 @@ import (
 	"feed/internal/lib/api/tag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -18,19 +19,20 @@ import (
 
 type Response struct {
 	response.Response
-	Posts      []post.PostResponse `json:"posts"`
-	NextCursor string              `json:"next_cursor,omitempty"`
-	HasNext    bool                `json:"has_next"`
-	Limit      int                 `json:"limit"`
+	Posts      []post.FeedPostResponse `json:"posts"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+	NextScore  int                     `json:"next_score,omitempty"`
+	HasNext    bool                    `json:"has_next"`
+	Limit      int                     `json:"limit"`
 }
 
-type PostDBGetter interface {
-	GetUserPublicPosts(profileID string, cursorTime time.Time, limit int) ([]post.UserPost, error)
-	GetUserPosts(profileID string, cursorTime time.Time, limit int) ([]post.UserPost, error)
-	GetPostsImages(postIDs []string) ([]string, []string, map[string]map[string]string, map[string][]image.Image, error)
-	GetImagesTags(postImageIDs []string) (map[string][]string, error)
+type FeedDBGetter interface {
+	GetFeedPosts(cursorTime time.Time, limit int) ([]post.UserPost, error)
+	GetFeedPostsByScore(cursorScore int, cursorTime time.Time, limit int) ([]post.UserPost, error)
 	GetPostsVotes(postIDs []string, viewerProfileID string) (map[string]int, error)
+	GetPostsImages(postIDs []string) ([]string, []string, map[string]map[string]string, map[string][]image.Image, error)
 	GetImagesVotes(postImageIDs []string, viewerProfileID string) (map[string]int, error)
+	GetImagesTags(postImageIDs []string) (map[string][]string, error)
 }
 
 type ImageService interface {
@@ -49,33 +51,19 @@ const (
 	defaultLimit = 20
 	maxLimit     = 100
 
-	errInvalidCursorFormat = "cursor must be valid RFC3339 timestamp"
-	errInvalidLimitFormat  = "limit must be positive integer"
+	errInvalidCursorFormat      = "cursor must be valid RFC3339 timestamp"
+	errInvalidLimitFormat       = "limit must be positive integer"
+	errInvalidScoreCursorFormat = "score_cursor must be positive integer"
 )
 
-func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
+func New(log *slog.Logger, feedDBGetter FeedDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		const op = "handlers.posts.user.all.New"
+		const op = "handlers.feed.posts.New"
 
 		log = log.With(
 			slog.String("op", op),
 			slog.String("request_id", middleware.GetReqID(r.Context())),
 		)
-
-		profileID := r.Header.Get("X-Profile-ID")
-		if profileID == "" {
-			log.Error("X-Profile-ID header is required")
-			render.Status(r, http.StatusBadRequest)
-			render.JSON(w, r, response.Error("X-Profile-ID header is required"))
-			return
-		}
-
-		if _, err := uuid.Parse(profileID); err != nil {
-			log.Error("invalid profile id format", slog.String("error", err.Error()))
-			render.Status(r, http.StatusBadRequest)
-			render.JSON(w, r, response.Error("invalid profile id format"))
-			return
-		}
 
 		viewerProfileID := r.Header.Get("X-Viewer-Profile-ID")
 		if viewerProfileID == "" {
@@ -92,9 +80,10 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 			return
 		}
 
-		isOwnerViewing := viewerProfileID == profileID
+		sortType := r.URL.Query().Get("sort")
 
-		cursorTime, limit, errMsg, err := parseQueryParams(r)
+		cursorTime, cursorScore, limit, errMsg, err := parseQueryParams(r, sortType)
+
 		if err != nil {
 			log.Error("failed to parse query params", slog.String("error", err.Error()))
 			render.Status(r, http.StatusBadRequest)
@@ -103,25 +92,26 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 		}
 
 		var userPosts []post.UserPost
-		if isOwnerViewing {
-			userPosts, err = postDBGetter.GetUserPosts(profileID, cursorTime, limit)
-		} else {
-			userPosts, err = postDBGetter.GetUserPublicPosts(profileID, cursorTime, limit)
+		switch {
+		case sortType == "score" || sortType == "popular":
+			userPosts, err = feedDBGetter.GetFeedPostsByScore(cursorScore, cursorTime, limit)
+		default:
+			userPosts, err = feedDBGetter.GetFeedPosts(cursorTime, limit)
 		}
 
 		if err != nil {
-			log.Error("failed to get user posts", slog.String("error", err.Error()))
+			log.Error("failed to get feed posts", slog.String("error", err.Error()))
 			render.Status(r, http.StatusInternalServerError)
-			render.JSON(w, r, response.Error("failed to get user posts"))
+			render.JSON(w, r, response.Error("failed to get feed posts"))
 			return
 		}
 
 		if len(userPosts) == 0 {
-			log.Info("no posts found for user")
+			log.Info("no posts found in feed")
 			render.Status(r, http.StatusOK)
 			render.JSON(w, r, Response{
 				Response: response.OK(),
-				Posts:    []post.PostResponse{},
+				Posts:    []post.FeedPostResponse{},
 				HasNext:  false,
 				Limit:    limit,
 			})
@@ -129,10 +119,15 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 		}
 
 		var nextCursor string
+		var nextScore int
 		hasNext := false
+
 		if len(userPosts) >= limit {
 			lastPost := userPosts[len(userPosts)-1]
 			nextCursor = lastPost.CreatedAt.UTC().Format(time.RFC3339)
+			if sortType == "score" || sortType == "popular" {
+				nextScore = lastPost.Score
+			}
 			hasNext = true
 		}
 
@@ -143,7 +138,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 
 		postVotesMap := make(map[string]int)
 		if viewerProfileID != "" {
-			votes, err := postDBGetter.GetPostsVotes(postIDs, viewerProfileID)
+			votes, err := feedDBGetter.GetPostsVotes(postIDs, viewerProfileID)
 			if err != nil {
 				log.Error("failed to get posts votes", slog.String("error", err.Error()))
 			} else {
@@ -151,7 +146,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 			}
 		}
 
-		postImageIDs, allImageIDs, postsPostImageIDsMap, postsImagesMap, err := postDBGetter.GetPostsImages(postIDs)
+		postImageIDs, allImageIDs, postsPostImageIDsMap, postsImagesMap, err := feedDBGetter.GetPostsImages(postIDs)
 		if err != nil {
 			log.Error("failed to get posts images", slog.String("error", err.Error()))
 			render.Status(r, http.StatusInternalServerError)
@@ -163,7 +158,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 
 		postImageVotesMap := make(map[string]int)
 		if viewerProfileID != "" && len(postImageIDs) > 0 {
-			votes, err := postDBGetter.GetImagesVotes(postImageIDs, viewerProfileID)
+			votes, err := feedDBGetter.GetImagesVotes(postImageIDs, viewerProfileID)
 			if err != nil {
 				log.Error("failed to get images votes", slog.String("error", err.Error()))
 			} else {
@@ -173,7 +168,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 
 		postImageTagsMap := make(map[string][]string)
 		if len(allImageIDs) > 0 {
-			postImageTagsMap, err = postDBGetter.GetImagesTags(postImageIDs)
+			postImageTagsMap, err = feedDBGetter.GetImagesTags(postImageIDs)
 			if err != nil {
 				log.Error("failed to get images tags", slog.String("error", err.Error()))
 			}
@@ -210,7 +205,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 			}
 		}
 
-		postsResponse := make([]post.PostResponse, 0, len(userPosts))
+		postsResponse := make([]post.FeedPostResponse, 0, len(userPosts))
 
 		for _, userPost := range userPosts {
 			postImages := postsImagesMap[userPost.ID]
@@ -244,7 +239,7 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 				images = append(images, img)
 			}
 
-			postResponse := post.PostResponse{
+			postResponse := post.FeedPostResponse{
 				ID:        userPost.ID,
 				ProfileID: userPost.ProfileID,
 				Text:      userPost.Text,
@@ -262,29 +257,38 @@ func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService,
 			postsResponse = append(postsResponse, postResponse)
 		}
 
-		log.Info("user posts retrieved successfully",
+		log.Info("feed posts retrieved successfully",
+			slog.String("sort", sortType),
 			slog.String("cursor", cursorTime.UTC().Format(time.RFC3339)),
+			slog.Int("cursor_score", cursorScore),
 			slog.Int("limit", limit),
 			slog.Int("posts_count", len(postsResponse)),
 			slog.Int("total_images", len(allImageIDs)),
 			slog.Int("total_tags", len(allTagIDs)),
 			slog.Bool("has_next", hasNext))
 
-		render.Status(r, http.StatusOK)
-		render.JSON(w, r, Response{
+		responseData := Response{
 			Response:   response.OK(),
 			Posts:      postsResponse,
 			NextCursor: nextCursor,
 			HasNext:    hasNext,
 			Limit:      limit,
-		})
+		}
+
+		if sortType == "score" || sortType == "popular" {
+			responseData.NextScore = nextScore
+		}
+
+		render.Status(r, http.StatusOK)
+		render.JSON(w, r, responseData)
 	}
 }
 
-func parseQueryParams(r *http.Request) (time.Time, int, string, error) {
-	const op = "handlers.posts.user.all.parseQueryParams"
+func parseQueryParams(r *http.Request, sortType string) (time.Time, int, int, string, error) {
+	const op = "handlers.feed.parseQueryParams"
 
 	cursorTime := time.Now().UTC()
+	cursorScore := math.MaxInt32
 	limit := defaultLimit
 
 	query := r.URL.Query()
@@ -292,20 +296,29 @@ func parseQueryParams(r *http.Request) (time.Time, int, string, error) {
 	if cursorStr := query.Get("cursor"); cursorStr != "" {
 		t, err := time.Parse(time.RFC3339, cursorStr)
 		if err != nil {
-			return time.Time{}, 0, errInvalidCursorFormat, fmt.Errorf("%s: cursor must be valid RFC3339 timestamp: %w", op, err)
+			return time.Time{}, 0, 0, errInvalidCursorFormat, fmt.Errorf("%s: cursor must be valid RFC3339 timestamp: %w", op, err)
 		}
 		cursorTime = t.UTC()
+	}
+
+	if scoreStr := query.Get("score_cursor"); scoreStr != "" && (sortType == "score" || sortType == "popular") {
+		score, err := strconv.Atoi(scoreStr)
+		if err != nil || score < 0 {
+			return time.Time{}, 0, 0, errInvalidScoreCursorFormat, fmt.Errorf("%s: score_cursor must be positive integer: %w", op, err)
+		}
+		cursorScore = score
 	}
 
 	if limitStr := query.Get("limit"); limitStr != "" {
 		l, err := strconv.Atoi(limitStr)
 		if err != nil || l < 1 {
-			return time.Time{}, 0, errInvalidLimitFormat, fmt.Errorf("%s: limit must be positive integer: %w", op, err)
+			return time.Time{}, 0, 0, errInvalidLimitFormat, fmt.Errorf("%s: limit must be positive integer: %w", op, err)
 		}
 		if l > maxLimit {
 			l = maxLimit
 		}
 		limit = l
 	}
-	return cursorTime, limit, "", nil
+
+	return cursorTime, cursorScore, limit, "", nil
 }

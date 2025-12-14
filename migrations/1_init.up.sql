@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS images (
 
 CREATE INDEX IF NOT EXISTS images_post_id_idx ON images (post_id);
 CREATE INDEX IF NOT EXISTS images_image_id_idx ON images (image_id);
+CREATE INDEX IF NOT EXISTS images_score_idx ON images (score);
 CREATE INDEX IF NOT EXISTS images_created_at_idx ON images (created_at);
 
 CREATE TABLE IF NOT EXISTS tags (

@@ -7,6 +7,7 @@ import (
 	"feed/internal/lib/api/post"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -48,12 +49,13 @@ func (s *Storage) CreatePost(profileID, text string, isDraft bool, images []imag
 	postQuery := `
 		INSERT INTO posts (profile_id, text, is_draft)
 		VALUES ($1, $2, $3)
-		RETURNING id, text, score, is_draft, created_at, updated_at
+		RETURNING id, profile_id, text, score, is_draft, created_at, updated_at
 	`
 
 	var userPost post.UserPost
 	err = tx.QueryRow(postQuery, profileID, text, isDraft).Scan(
 		&userPost.ID,
+		&userPost.ProfileID,
 		&userPost.Text,
 		&userPost.Score,
 		&userPost.IsDraft,
@@ -114,11 +116,11 @@ func (s *Storage) CreatePost(profileID, text string, isDraft bool, images []imag
 	return &userPost, nil
 }
 
-func (s *Storage) GetUserPublicPosts(profileID, cursor string, limit int) ([]post.UserPost, error) {
+func (s *Storage) GetUserPublicPosts(profileID string, cursorTime time.Time, limit int) ([]post.UserPost, error) {
 	const op = "storage.postgres.GetUserPublicPosts"
 
 	query := `
-		SELECT id, text, score, is_draft, created_at, updated_at
+		SELECT id, profile_id, text, score, is_draft, created_at, updated_at
 		FROM posts
 		WHERE profile_id = $1
 		AND created_at < $2
@@ -127,7 +129,7 @@ func (s *Storage) GetUserPublicPosts(profileID, cursor string, limit int) ([]pos
 		LIMIT $3
 	`
 
-	rows, err := s.db.Query(query, profileID, cursor, limit)
+	rows, err := s.db.Query(query, profileID, cursorTime, limit)
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to select user public posts: %w", op, err)
 	}
@@ -138,6 +140,7 @@ func (s *Storage) GetUserPublicPosts(profileID, cursor string, limit int) ([]pos
 		var post post.UserPost
 		err := rows.Scan(
 			&post.ID,
+			&post.ProfileID,
 			&post.Text,
 			&post.Score,
 			&post.IsDraft,
@@ -157,11 +160,11 @@ func (s *Storage) GetUserPublicPosts(profileID, cursor string, limit int) ([]pos
 	return posts, nil
 }
 
-func (s *Storage) GetUserPosts(profileID string, cursor string, limit int) ([]post.UserPost, error) {
+func (s *Storage) GetUserPosts(profileID string, cursorTime time.Time, limit int) ([]post.UserPost, error) {
 	const op = "storage.postgres.GetUserPosts"
 
 	query := `
-		SELECT id, text, score, is_draft, created_at, updated_at
+		SELECT id, profile_id, text, score, is_draft, created_at, updated_at
 		FROM posts
 		WHERE profile_id = $1
 		AND created_at < $2
@@ -169,7 +172,7 @@ func (s *Storage) GetUserPosts(profileID string, cursor string, limit int) ([]po
 		LIMIT $3
 	`
 
-	rows, err := s.db.Query(query, profileID, cursor, limit)
+	rows, err := s.db.Query(query, profileID, cursorTime, limit)
 	if err != nil {
 		return nil, fmt.Errorf("%s: failed to select user posts: %w", op, err)
 	}
@@ -180,6 +183,7 @@ func (s *Storage) GetUserPosts(profileID string, cursor string, limit int) ([]po
 		var post post.UserPost
 		err := rows.Scan(
 			&post.ID,
+			&post.ProfileID,
 			&post.Text,
 			&post.Score,
 			&post.IsDraft,
@@ -341,10 +345,10 @@ func (s *Storage) GetImagesVotes(postImageIDs []string, viewerProfileID string) 
 	}
 
 	query := `
-		SELECT i.post_image_id, COALESCE(iv.value, 0) as value
+		SELECT iv.post_image_id, COALESCE(iv.value, 0) as value
 		FROM images i
-		LEFT JOIN image_votes iv ON i.id = iv.post_image_id AND iv.profile_id = $1
-		WHERE i.post_image_id = ANY($2)
+		LEFT JOIN image_votes iv ON i.id = iv.post_image_id
+		WHERE iv.post_image_id = ANY($2) AND iv.profile_id = $1
 	`
 
 	rows, err := s.db.Query(query, viewerProfileID, pq.Array(postImageIDs))
@@ -603,4 +607,409 @@ func (s *Storage) VoteImage(postID, imageID, profileID string, value int) (int, 
 	}
 
 	return newScore, nil
+}
+
+func (s *Storage) GetFeedPosts(cursorTime time.Time, limit int) ([]post.UserPost, error) {
+	const op = "storage.postgres.GetFeedPosts"
+
+	query := `
+		SELECT id, profile_id, text, score, is_draft, created_at, updated_at
+		FROM posts
+		WHERE is_draft = false
+		AND created_at < $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	rows, err := s.db.Query(query, cursorTime, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to select feed posts: %w", op, err)
+	}
+	defer rows.Close()
+
+	var posts []post.UserPost
+	for rows.Next() {
+		var post post.UserPost
+		err := rows.Scan(
+			&post.ID,
+			&post.ProfileID,
+			&post.Text,
+			&post.Score,
+			&post.IsDraft,
+			&post.CreatedAt,
+			&post.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("%s: error scan post: %w", op, err)
+		}
+		posts = append(posts, post)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: error iterating rows: %w", op, err)
+	}
+
+	return posts, nil
+}
+
+func (s *Storage) GetFeedPostsByScore(cursorScore int, cursorTime time.Time, limit int) ([]post.UserPost, error) {
+	const op = "storage.postgres.GetFeedPostsByScore"
+
+	query := `
+		SELECT id, profile_id, text, score, is_draft, created_at, updated_at
+		FROM posts
+		WHERE is_draft = false
+		AND (score < $1 OR (score = $1 AND created_at < $2))
+		ORDER BY score DESC, created_at DESC
+		LIMIT $3
+	`
+
+	rows, err := s.db.Query(query, cursorScore, cursorTime, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to select feed posts by score: %w", op, err)
+	}
+	defer rows.Close()
+
+	var posts []post.UserPost
+	for rows.Next() {
+		var post post.UserPost
+		err := rows.Scan(
+			&post.ID,
+			&post.ProfileID,
+			&post.Text,
+			&post.Score,
+			&post.IsDraft,
+			&post.CreatedAt,
+			&post.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("%s: error scan post: %w", op, err)
+		}
+		posts = append(posts, post)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: error iterating rows: %w", op, err)
+	}
+
+	return posts, nil
+}
+
+func (s *Storage) SearchPostsByTagsRelevance(tagIDs []string, cursorRelevance int, cursorTime time.Time, limit int) ([]post.UserPostWithRelevance, error) {
+	const op = "storage.postgres.SearchPostsByTagsRelevance"
+
+	query := `
+		WITH post_tags AS (
+			SELECT 
+				p.id,
+				p.profile_id,
+				p.text,
+				p.score,
+				p.is_draft,
+				p.created_at,
+				p.updated_at,
+				COUNT(DISTINCT t.tag_id) as relevance
+			FROM posts p
+			JOIN images i ON p.id = i.post_id
+			JOIN tags t ON i.id = t.post_image_id
+			WHERE p.is_draft = false
+				AND t.tag_id = ANY($1)
+			GROUP BY p.id
+			HAVING COUNT(DISTINCT t.tag_id) > 0
+		)
+		SELECT id, profile_id, text, score, is_draft, created_at, updated_at, relevance
+		FROM post_tags
+		WHERE relevance <= $2 AND created_at < $3
+		ORDER BY relevance DESC, created_at DESC
+		LIMIT $4
+	`
+
+	rows, err := s.db.Query(query, pq.Array(tagIDs), cursorRelevance, cursorTime, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to search posts by tags with relevance: %w", op, err)
+	}
+	defer rows.Close()
+
+	var posts []post.UserPostWithRelevance
+	for rows.Next() {
+		var post post.UserPostWithRelevance
+		err := rows.Scan(
+			&post.ID,
+			&post.ProfileID,
+			&post.Text,
+			&post.Score,
+			&post.IsDraft,
+			&post.CreatedAt,
+			&post.UpdatedAt,
+			&post.Relevance,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("%s: error scan post: %w", op, err)
+		}
+		posts = append(posts, post)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: error iterating rows: %w", op, err)
+	}
+
+	return posts, nil
+}
+
+func (s *Storage) SearchImagesByTagsRelevance(tagIDs []string, cursorRelevance int, cursorTime time.Time, limit int) ([]image.ImageWithRelevance, error) {
+	const op = "storage.postgres.SearchImagesByTagsRelevance"
+
+	query := `
+        WITH image_tags AS (
+            SELECT 
+                i.id,
+                i.image_id,
+                i.score,
+                i.created_at,
+                p.profile_id,
+				i.post_id,
+                COUNT(DISTINCT t.tag_id) as relevance
+            FROM images i
+            JOIN posts p ON i.post_id = p.id
+            JOIN tags t ON i.id = t.post_image_id
+            WHERE p.is_draft = false
+                AND t.tag_id = ANY($1)
+            GROUP BY i.id, p.profile_id
+            HAVING COUNT(DISTINCT t.tag_id) > 0
+        )
+        SELECT id, image_id, score, created_at, profile_id, post_id, relevance
+        FROM image_tags
+        WHERE relevance <= $2 AND created_at < $3
+        ORDER BY relevance DESC, created_at DESC
+        LIMIT $4
+    `
+
+	rows, err := s.db.Query(query, pq.Array(tagIDs), cursorRelevance, cursorTime, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%s: failed to search images by tags with relevance: %w", op, err)
+	}
+	defer rows.Close()
+
+	var images []image.ImageWithRelevance
+	for rows.Next() {
+		var img image.ImageWithRelevance
+		err := rows.Scan(
+			&img.ID,
+			&img.ImageID,
+			&img.Score,
+			&img.CreatedAt,
+			&img.ProfileID,
+			&img.PostID,
+			&img.Relevance,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("%s: error scan image: %w", op, err)
+		}
+		images = append(images, img)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("%s: error iterating rows: %w", op, err)
+	}
+
+	return images, nil
+}
+
+func (s *Storage) DeletePost(postID, profileID string) error {
+	const op = "storage.postgres.DeletePost"
+
+	var exists bool
+	checkQuery := `
+        SELECT EXISTS(
+            SELECT 1 FROM posts 
+            WHERE id = $1 AND profile_id = $2
+        )
+    `
+
+	err := s.db.QueryRow(checkQuery, postID, profileID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("%s: failed to check post ownership: %w", op, err)
+	}
+
+	if !exists {
+		slog.Warn("post not found or not owned by user", slog.String("op", op))
+		return fmt.Errorf("post not found or not owned by user")
+	}
+
+	deleteQuery := `
+        DELETE FROM posts 
+        WHERE id = $1 AND profile_id = $2
+    `
+
+	res, err := s.db.Exec(deleteQuery, postID, profileID)
+	if err != nil {
+		return fmt.Errorf("%s: failed to delete post: %w", op, err)
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: failed to get rows affected: %w", op, err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("%s: post not found or not owned by user", op)
+	}
+
+	return nil
+}
+
+func (s *Storage) GetPostByID(postID string) (*post.UserPost, error) {
+	const op = "storage.postgres.GetPostByID"
+
+	query := `
+        SELECT id, profile_id, text, score, is_draft, created_at, updated_at
+        FROM posts
+        WHERE id = $1
+    `
+
+	var userPost post.UserPost
+	err := s.db.QueryRow(query, postID).Scan(
+		&userPost.ID,
+		&userPost.ProfileID,
+		&userPost.Text,
+		&userPost.Score,
+		&userPost.IsDraft,
+		&userPost.CreatedAt,
+		&userPost.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%s: failed to get post by id: %w", op, err)
+	}
+
+	return &userPost, nil
+}
+
+func (s *Storage) GetPostImages(postID string) ([]string, []string, map[string]string, []image.Image, error) {
+	const op = "storage.postgres.GetPostImages"
+
+	query := `
+        SELECT id, post_id, image_id, score
+        FROM images
+        WHERE post_id = $1
+        ORDER BY created_at ASC
+    `
+
+	rows, err := s.db.Query(query, postID)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("%s: failed to select post images: %w", op, err)
+	}
+	defer rows.Close()
+
+	postImageIDs := []string{}
+	allImageIDs := []string{}
+	imageIDsPostImageIDsMap := make(map[string]string)
+	postImages := []image.Image{}
+
+	for rows.Next() {
+		var id string
+		var postID string
+		var img image.Image
+
+		err := rows.Scan(&id, &postID, &img.ImageID, &img.Score)
+		if err != nil {
+			slog.Error("failed to scan image row",
+				slog.String("op", op),
+				slog.String("error", err.Error()))
+			continue
+		}
+
+		postImageIDs = append(postImageIDs, id)
+		allImageIDs = append(allImageIDs, img.ImageID)
+		imageIDsPostImageIDsMap[img.ImageID] = id
+		postImages = append(postImages, img)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("%s: error iterating rows: %w", op, err)
+	}
+
+	return postImageIDs, allImageIDs, imageIDsPostImageIDsMap, postImages, nil
+}
+
+func (s *Storage) GetPostVote(postID string, viewerProfileID string) (int, error) {
+	const op = "storage.postgres.GetPostsVotes"
+
+	query := `
+		SELECT post_id, value
+		FROM post_votes
+		WHERE post_id = $1 AND profile_id = $2
+	`
+
+	var value int
+	err := s.db.QueryRow(query, postID, viewerProfileID).Scan(&value)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("%s: failed to get post vote: %w", op, err)
+	}
+
+	return value, nil
+}
+
+func (s *Storage) PublishPost(postID, profileID string) error {
+	const op = "storage.postgres.PublishPost"
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("%s: failed to begin transaction: %w", op, err)
+	}
+	defer tx.Rollback()
+
+	var isDraft bool
+	var ownerID string
+	checkQuery := `
+        SELECT profile_id, is_draft
+        FROM posts 
+        WHERE id = $1
+        FOR UPDATE
+    `
+
+	err = tx.QueryRow(checkQuery, postID).Scan(&ownerID, &isDraft)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			slog.Warn("post not found",
+				slog.String("op", op),
+				slog.String("error", err.Error()))
+			return fmt.Errorf("post not found")
+		}
+		return fmt.Errorf("%s: failed to check post: %w", op, err)
+	}
+
+	if ownerID != profileID {
+		slog.Warn("user is not the owner of the post", slog.String("op", op))
+		return fmt.Errorf("user is not the owner of the post")
+	}
+
+	if !isDraft {
+		slog.Warn("post is already published", slog.String("op", op))
+		return fmt.Errorf("post is already published")
+	}
+
+	updateQuery := `
+        UPDATE posts 
+        SET is_draft = false, updated_at = NOW()
+        WHERE id = $1 AND profile_id = $2
+        RETURNING id
+    `
+
+	var updatedID string
+	err = tx.QueryRow(updateQuery, postID, profileID).Scan(&updatedID)
+	if err != nil {
+		return fmt.Errorf("%s: failed to publish post: %w", op, err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("%s: failed to commit transaction: %w", op, err)
+	}
+
+	return nil
 }

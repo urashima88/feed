@@ -37,7 +37,6 @@ type ImageService interface {
 
 type TagService interface {
 	CreateTags(tags []string) ([]tag.Tag, error)
-	GetTags(tagIDs []string) ([]tag.Tag, error)
 }
 
 type UUIDService interface {
@@ -185,6 +184,7 @@ func New(log *slog.Logger, postDBCreator PostDBCreator, imageService ImageServic
 
 		postResponse := post.CreatedPostResponse{
 			ID:        createdPost.ID,
+			ProfileID: createdPost.ProfileID,
 			Text:      createdPost.Text,
 			Score:     createdPost.Score,
 			IsDraft:   createdPost.IsDraft,

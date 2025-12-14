@@ -10,6 +10,7 @@ DROP INDEX IF EXISTS posts_score_idx
 
 DROP INDEX IF EXISTS images_post_id_idx;
 DROP INDEX IF EXISTS images_image_id_idx;
+DROP INDEX IF EXISTS images_score_idx;
 DROP INDEX IF EXISTS images_created_at_idx;
 
 DROP INDEX IF EXISTS tags_image_post_id_idx;

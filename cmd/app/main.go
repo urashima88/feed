@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	feed_posts "feed/internal/app/handlers/feed/posts"
 	posts_create "feed/internal/app/handlers/posts/create"
+	posts_delete "feed/internal/app/handlers/posts/delete"
+	posts_get "feed/internal/app/handlers/posts/get"
 	images_vote "feed/internal/app/handlers/posts/images/vote"
+	posts_publish "feed/internal/app/handlers/posts/publish"
 	posts_user_all "feed/internal/app/handlers/posts/user/all"
 	posts_vote "feed/internal/app/handlers/posts/vote"
+	search_images "feed/internal/app/handlers/search/images"
+	search_posts "feed/internal/app/handlers/search/posts"
 	"feed/internal/app/middleware/logger"
 	app_config "feed/internal/config/app-config"
 	"feed/internal/lib/logger/sl"
@@ -74,8 +80,16 @@ func main() {
 		r.Route("/v1", func(r chi.Router) {
 			r.Post("/posts", posts_create.New(log, storage, imageService, tagService, uuidService, &cfg.PostMeta))
 			r.Get("/posts/user/all", posts_user_all.New(log, storage, imageService, tagService, uuidService))
-			r.Post("/posts/{post_id}/vote", posts_vote.New(log, storage))
-			r.Post("/posts/{post_id}/images/{image_id}/vote", images_vote.New(log, storage))
+			r.Get("/posts/{post_id}", posts_get.New(log, storage, imageService, tagService, uuidService))
+			r.Put("/posts/{post_id}/publish", posts_publish.New(log, storage))
+			r.Put("/posts/{post_id}/vote", posts_vote.New(log, storage))
+			r.Put("/posts/{post_id}/images/{image_id}/vote", images_vote.New(log, storage))
+			r.Delete("/posts/{post_id}", posts_delete.New(log, storage))
+
+			r.Get("/feed/posts", feed_posts.New(log, storage, imageService, tagService, uuidService))
+
+			r.Get("/search/posts", search_posts.New(log, storage, imageService, tagService, uuidService))
+			r.Get("/search/images", search_images.New(log, storage, imageService, tagService, uuidService))
 		})
 	})
 
