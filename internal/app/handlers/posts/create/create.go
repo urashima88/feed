@@ -50,6 +50,19 @@ const (
 	errInvalidImageID = "invalid image id"
 )
 
+// @Summary Create a new post
+// @Description Creates a new post with images and tags. Tags are validated and created in tag service. Images must exist in image service.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the post creator" format(uuid)
+// @Param request body Request true "Post creation data"
+// @Success 201 {object} Response "Post created successfully"
+// @Failure 400 {object} response.Response "Bad request - invalid input parameters or validation failed"
+// @Failure 401 {object} response.Response "Unauthorized - missing or invalid authentication"
+// @Failure 500 {object} response.Response "Internal server error - database or service failure"
+// @Security BearerAuth
+// @Router /posts [post]
 func New(log *slog.Logger, postDBCreator PostDBCreator, imageService ImageService, tagService TagService, uuidService UUIDService, postMeta *app_config.PostMeta) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.create.New"

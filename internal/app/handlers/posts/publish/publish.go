@@ -21,6 +21,20 @@ type PostDBPublisher interface {
 	PublishPost(postID, profileID string) error
 }
 
+// @Summary Publish a draft post
+// @Description Publishes a draft post, making it publicly visible. Only the post owner can publish their own draft posts. Published posts cannot be re-published.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the post owner" format(uuid)
+// @Param post_id path string true "Post ID to publish" format(uuid)
+// @Success 200 {object} Response "Post published successfully"
+// @Failure 400 {object} response.Response "Bad request - invalid parameters, post already published, or missing headers"
+// @Failure 403 {object} response.Response "Forbidden - user is not the owner of the post"
+// @Failure 404 {object} response.Response "Post not found"
+// @Failure 500 {object} response.Response "Internal server error - database failure"
+// @Security BearerAuth
+// @Router /posts/{post_id}/publish [put]
 func New(log *slog.Logger, postDBPublisher PostDBPublisher) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.publish.New"

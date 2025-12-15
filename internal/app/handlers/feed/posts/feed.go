@@ -56,6 +56,22 @@ const (
 	errInvalidScoreCursorFormat = "score_cursor must be positive integer"
 )
 
+// @Summary Get feed posts
+// @Description Retrieves a feed of posts for the authenticated user. Supports two sorting modes: chronological (default) and by popularity (score). Uses cursor-based pagination for efficient data retrieval.
+// @Tags Feed
+// @Accept json
+// @Produce json
+// @Param X-Viewer-Profile-ID header string true "Profile ID of the viewer (for feed and vote information)" format(uuid)
+// @Param sort query string false "Sorting method: 'chronological' (default) or 'score'/'popular' (by popularity)"
+// @Param cursor query string false "Pagination cursor (RFC3339 timestamp) for chronological sorting" format(date-time)
+// @Param score_cursor query integer false "Pagination cursor (score value) for score-based sorting" minimum(0)
+// @Param limit query integer false "Number of posts to return (1-100, default: 20)" minimum(1) maximum(100) default(20)
+// @Success 200 {object} Response "Feed posts retrieved successfully with pagination metadata"
+// @Failure 400 {object} response.Response "Bad request - invalid parameters or malformed request"
+// @Failure 401 {object} response.Response "Unauthorized - missing or invalid authentication headers"
+// @Failure 500 {object} response.Response "Internal server error - database or service failure"
+// @Security BearerAuth
+// @Router /feed/posts [get]
 func New(log *slog.Logger, feedDBGetter FeedDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.feed.posts.New"

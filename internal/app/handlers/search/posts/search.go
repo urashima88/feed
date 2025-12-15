@@ -56,6 +56,21 @@ const (
 	errInvalidLimitFormat  = "limit must be positive integer"
 )
 
+// @Summary Search posts by tags
+// @Description Searches for posts based on tag relevance. Posts are ranked by how many of the requested tags they contain. Supports pagination using a combined cursor of relevance score and timestamp. Tags are validated and created if they don't exist.
+// @Tags Search
+// @Accept json
+// @Produce json
+// @Param X-Viewer-Profile-ID header string true "Profile ID of the viewer (for vote information)" format(uuid)
+// @Param tags query string true "Comma-separated list of tags to search for" example:"nature,mountains,sunset"
+// @Param cursor query string false "Pagination cursor in format 'relevance_timestamp' or just 'timestamp'" example:"5_2024-01-15T10:30:00Z"
+// @Param limit query integer false "Number of posts to return (1-100, default: 20)" minimum(1) maximum(100) default(20)
+// @Success 200 {object} Response "Posts retrieved successfully with relevance scoring and pagination"
+// @Failure 400 {object} response.Response "Bad request - missing tags parameter or invalid cursor format"
+// @Failure 401 {object} response.Response "Unauthorized - missing or invalid authentication headers"
+// @Failure 500 {object} response.Response "Internal server error - database or service failure"
+// @Security BearerAuth
+// @Router /search/posts [get]
 func New(log *slog.Logger, searchDBGetter SearchDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.search.posts.New"

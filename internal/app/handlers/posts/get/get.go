@@ -40,6 +40,20 @@ type UUIDService interface {
 	DeduplicateIDs(ids []string) []string
 }
 
+// @Summary Get a specific post by ID
+// @Description Retrieves detailed information about a specific post including images, tags, votes, and metadata. Draft posts are only accessible by the post owner. Returns comprehensive post data with user-specific vote information.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Viewer-Profile-ID header string true "Profile ID of the viewer (used for access control and vote information)" format(uuid)
+// @Param post_id path string true "Post ID to retrieve" format(uuid)
+// @Success 200 {object} Response "Post retrieved successfully"
+// @Failure 400 {object} response.Response "Bad request - invalid post ID format"
+// @Failure 401 {object} response.Response "Unauthorized - missing or invalid authentication"
+// @Failure 404 {object} response.Response "Post not found - either doesn't exist or viewer doesn't have access"
+// @Failure 500 {object} response.Response "Internal server error - database or service failure"
+// @Security BearerAuth
+// @Router /posts/{post_id} [get]
 func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.get.New"

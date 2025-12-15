@@ -1,3 +1,18 @@
+// @title Feed Microservice API
+// @version 1.0
+// @description Microservice for managing posts, post images, voting, feed, and search functionality
+//
+// @host localhost:8095
+// @BasePath /api/v1
+//
+// @tag.name Posts
+// @tag.description "Post operations: create post, get single post, vote post/image, delete, etc"
+//
+// @tag.name Feed
+// @tag.description "Feed operations: get content for the user"
+//
+// @tag.name Search
+// @tag.description "Search operations: tag search for posts/images"
 package main
 
 import (
@@ -27,8 +42,11 @@ import (
 	"syscall"
 	"time"
 
+	_ "feed/docs"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 const (
@@ -92,6 +110,10 @@ func main() {
 			r.Get("/search/images", search_images.New(log, storage, imageService, tagService, uuidService))
 		})
 	})
+
+	router.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	log.Info("starting server", slog.String("address", cfg.HTTPServer.Host+":"+cfg.HTTPServer.Port))
 

@@ -53,6 +53,21 @@ const (
 	errInvalidLimitFormat  = "limit must be positive integer"
 )
 
+// @Summary Get all posts for a user
+// @Description Retrieves all posts for a specific user with cursor-based pagination. Returns public posts for any viewer, but includes drafts if the viewer is the post owner. Includes detailed post information, images, tags, and vote status.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the user whose posts are being retrieved" format(uuid)
+// @Param X-Viewer-Profile-ID header string true "Profile ID of the viewer (used for access control and vote information)" format(uuid)
+// @Param cursor query string false "Pagination cursor (RFC3339 timestamp) - returns posts created before this time" format(date-time)
+// @Param limit query integer false "Number of posts to return (1-100, default: 20)" minimum(1) maximum(100) default(20)
+// @Success 200 {object} Response "Posts retrieved successfully with pagination metadata"
+// @Failure 400 {object} response.Response "Bad request - invalid parameters or malformed request"
+// @Failure 401 {object} response.Response "Unauthorized - missing or invalid authentication headers"
+// @Failure 500 {object} response.Response "Internal server error - database or service failure"
+// @Security BearerAuth
+// @Router /posts/user/all [get]
 func New(log *slog.Logger, postDBGetter PostDBGetter, imageService ImageService, tagService TagService, uuidService UUIDService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.user.all.New"

@@ -38,3 +38,5 @@ migrate-down:
 migrate-down-steps:
 	$(MIGRATE_RUN) --down --steps=2
 
+swag-init:
+	swag init -g cmd/app/main.go --output docs

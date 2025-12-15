@@ -27,6 +27,22 @@ type ImageDBVoter interface {
 	GetImageInfo(postID, imageID string) (exists bool, score int, err error)
 }
 
+// @Summary Vote on an image within a post
+// @Description Allows users to upvote (1), downvote (-1), or remove vote (0) on a specific image within a published post. Images in draft posts cannot be voted on.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the voter" format(uuid)
+// @Param post_id path string true "Post ID containing the image" format(uuid)
+// @Param image_id path string true "Image ID to vote on" format(uuid)
+// @Param request body Request true "Vote value"
+// @Success 200 {object} Response "Vote recorded successfully with updated image scores"
+// @Failure 400 {object} response.Response "Bad request - invalid vote value, invalid parameters, or missing headers"
+// @Failure 403 {object} response.Response "Forbidden - attempting to vote on image in draft post"
+// @Failure 404 {object} response.Response "Image not found"
+// @Failure 500 {object} response.Response "Internal server error - database failure"
+// @Security BearerAuth
+// @Router /posts/{post_id}/images/{image_id}/vote [put]
 func New(log *slog.Logger, imageDBVoter ImageDBVoter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.images.vote.New"

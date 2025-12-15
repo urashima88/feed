@@ -27,6 +27,21 @@ type PostDBVoter interface {
 	GetPostInfo(postID string) (exists bool, IsDraft bool, score int, err error)
 }
 
+// @Summary Vote on a post
+// @Description Allows users to upvote (1), downvote (-1), or remove vote (0) on a published post. Draft posts cannot be voted on.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the voter" format(uuid)
+// @Param post_id path string true "Post ID to vote on" format(uuid)
+// @Param request body Request true "Vote value"
+// @Success 200 {object} Response "Vote recorded successfully with updated scores"
+// @Failure 400 {object} response.Response "Bad request - invalid vote value, invalid parameters, or missing headers"
+// @Failure 403 {object} response.Response "Forbidden - attempting to vote on draft post"
+// @Failure 404 {object} response.Response "Post not found"
+// @Failure 500 {object} response.Response "Internal server error - database failure"
+// @Security BearerAuth
+// @Router /posts/{post_id}/vote [put]
 func New(log *slog.Logger, postDBVoter PostDBVoter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.vote.New"

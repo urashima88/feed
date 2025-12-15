@@ -20,6 +20,20 @@ type PostDBDeleter interface {
 	DeletePost(postID, profileID string) error
 }
 
+// @Summary Delete a post
+// @Description Deletes a post. Only the post owner can delete their own posts. This action is irreversible and removes all associated data including images, tags, and votes.
+// @Tags Posts
+// @Accept json
+// @Produce json
+// @Param X-Profile-ID header string true "Profile ID of the post owner" format(uuid)
+// @Param post_id path string true "Post ID to delete" format(uuid)
+// @Success 200 {object} Response "Post deleted successfully"
+// @Failure 400 {object} response.Response "Bad request - invalid parameters or missing headers"
+// @Failure 403 {object} response.Response "Forbidden - user is not the owner of the post"
+// @Failure 404 {object} response.Response "Post not found"
+// @Failure 500 {object} response.Response "Internal server error - database failure"
+// @Security BearerAuth
+// @Router /posts/{post_id} [delete]
 func New(log *slog.Logger, postDBDeleter PostDBDeleter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const op = "handlers.posts.delete.New"
